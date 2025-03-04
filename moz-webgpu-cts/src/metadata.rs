@@ -58,6 +58,7 @@ impl<'a> metadata::File<'a> for File {
 #[derive(Clone, Debug, Default)]
 pub struct FileProps {
     pub is_disabled: Option<PropertyValue<Expr<Value<'static>>, String>>,
+    pub bug: Option<PropertyValue<Expr<Value<'static>>, String>>,
     #[allow(clippy::type_complexity)]
     pub prefs: Option<PropertyValue<Expr<Value<'static>>, Vec<(String, String)>>>,
     pub tags: Option<PropertyValue<Expr<Value<'static>>, Vec<String>>>,
@@ -139,6 +140,19 @@ impl<'a> Properties<'a> for FileProps {
             )
             .map(|((), is_disabled)| FileProp::Disabled(is_disabled));
 
+        let bug = helper
+            .parser(
+                keyword("bug").to(()),
+                conditional_term.clone(),
+                any()
+                    .and_is(newline().or(end()).not())
+                    .repeated()
+                    .at_least(1)
+                    .to_slice()
+                    .map(|s: &str| s.to_owned()),
+            )
+            .map(|((), bug)| FileProp::Bug(bug));
+
         let implementation_status = helper
             .parser(
                 just("implementation-status").to(()),
@@ -153,7 +167,7 @@ impl<'a> Properties<'a> for FileProps {
                 FileProp::ImplementationStatus(implementation_status)
             });
 
-        choice((prefs, tags, disabled, implementation_status))
+        choice((prefs, tags, disabled, bug, implementation_status))
             .map_with(|prop, e| (e.span(), prop))
             .boxed()
     }
@@ -165,6 +179,7 @@ impl<'a> Properties<'a> for FileProps {
             is_disabled,
             prefs,
             tags,
+            bug,
         } = self;
         macro_rules! check_dupe_then_insert {
             ($new:expr, $old:expr, $prop_name:literal) => {{
@@ -190,6 +205,9 @@ impl<'a> Properties<'a> for FileProps {
             FileProp::Tags(new_tags) => check_dupe_then_insert!(new_tags, tags, "tags"),
             FileProp::Disabled(new_is_disabled) => {
                 check_dupe_then_insert!(new_is_disabled, is_disabled, "disabled")
+            }
+            FileProp::Bug(new_bug) => {
+                check_dupe_then_insert!(new_bug, bug, "bug")
             }
         }
     }
@@ -329,6 +347,44 @@ fn file_props() {
     );
 
     insta::assert_debug_snapshot!(
+        parser.parse("disabled: reason"),
+        @r#"
+    ParseResult {
+        output: Some(
+            (
+                0..16,
+                Disabled(
+                    Unconditional(
+                        "reason",
+                    ),
+                ),
+            ),
+        ),
+        errs: [],
+    }
+    "#
+    );
+
+    insta::assert_debug_snapshot!(
+        parser.parse("bug: reason"),
+        @r#"
+    ParseResult {
+        output: Some(
+            (
+                0..11,
+                Bug(
+                    Unconditional(
+                        "reason",
+                    ),
+                ),
+            ),
+        ),
+        errs: [],
+    }
+    "#
+    );
+
+    insta::assert_debug_snapshot!(
         parser.parse("tags: [INVAL!D]"),
         @r###"
     ParseResult {
@@ -451,77 +507,84 @@ pub enum FileProp {
     Prefs(PropertyValue<Expr<Value<'static>>, Vec<(String, String)>>),
     Tags(PropertyValue<Expr<Value<'static>>, Vec<String>>),
     Disabled(PropertyValue<Expr<Value<'static>>, String>),
+    Bug(PropertyValue<Expr<Value<'static>>, String>),
     ImplementationStatus(PropertyValue<Expr<Value<'static>>, ImplementationStatus>),
 }
 
-fn format_file_properties(props: &FileProps) -> impl Display + '_ {
-    fn write_prop_val<'a, V>(
-        prop_name: &'a str,
-        val: &'a PropertyValue<Expr<Value>, V>,
-        disp_rhs: impl Fn(&V, &mut Formatter<'_>) -> fmt::Result + 'a,
-        f: &mut Formatter<'_>,
-    ) -> fmt::Result {
-        fn disp_condition(cond: &Expr<Value<'_>>, f: &mut Formatter<'_>) -> fmt::Result {
-            match cond {
-                Expr::Value(val) => match val {
-                    Value::Variable(var) => write!(f, "{var}"),
-                    Value::Literal(lit) => match lit {
-                        Literal::String(s) => write!(f, "{s:?}"),
-                    },
+fn write_prop_val<'a, V>(
+    prop_name: &'a str,
+    val: &'a PropertyValue<Expr<Value>, V>,
+    disp_rhs: impl Fn(&V, &mut Formatter<'_>) -> fmt::Result + 'a,
+    f: &mut Formatter<'_>,
+) -> fmt::Result {
+    fn disp_condition(cond: &Expr<Value<'_>>, f: &mut Formatter<'_>) -> fmt::Result {
+        match cond {
+            Expr::Value(val) => match val {
+                Value::Variable(var) => write!(f, "{var}"),
+                Value::Literal(lit) => match lit {
+                    Literal::String(s) => write!(f, "{s:?}"),
                 },
-                Expr::And(lhs, rhs) => {
-                    disp_condition(lhs, f)?;
-                    write!(f, " and ")?;
-                    disp_condition(rhs, f)
-                }
-                Expr::Not(cond) => {
-                    write!(f, "not ")?;
-                    disp_condition(cond, f)
-                }
-                // TODO: almost certainly not gonna be correct with precedence rules. Eek!
-                Expr::Eq(rhs, lhs) => {
-                    disp_condition(rhs, f)?;
-                    write!(f, " == ")?;
-                    disp_condition(lhs, f)
-                }
+            },
+            Expr::And(lhs, rhs) => {
+                disp_condition(lhs, f)?;
+                write!(f, " and ")?;
+                disp_condition(rhs, f)
+            }
+            Expr::Not(cond) => {
+                write!(f, "not ")?;
+                disp_condition(cond, f)
+            }
+            // TODO: almost certainly not gonna be correct with precedence rules. Eek!
+            Expr::Eq(rhs, lhs) => {
+                disp_condition(rhs, f)?;
+                write!(f, " == ")?;
+                disp_condition(lhs, f)
             }
         }
-
-        write!(f, "{prop_name}:")?;
-        match val {
-            PropertyValue::Unconditional(val) => {
-                write!(f, " ")?;
-                disp_rhs(val, f)?;
-                writeln!(f)?;
-            }
-            PropertyValue::Conditional(ConditionalValue {
-                conditions,
-                fallback,
-            }) => {
-                writeln!(f)?;
-                for (condition, rhs) in conditions {
-                    write!(f, "  if ")?;
-                    disp_condition(condition, f)?;
-                    write!(f, ": ")?;
-                    disp_rhs(rhs, f)?;
-                    writeln!(f)?;
-                }
-                if let Some(fallback) = fallback {
-                    write!(f, "  ")?;
-                    disp_rhs(fallback, f)?;
-                    writeln!(f)?;
-                }
-            }
-        }
-        Ok(())
     }
+
+    write!(f, "{prop_name}:")?;
+    match val {
+        PropertyValue::Unconditional(val) => {
+            write!(f, " ")?;
+            disp_rhs(val, f)?;
+            writeln!(f)?;
+        }
+        PropertyValue::Conditional(ConditionalValue {
+            conditions,
+            fallback,
+        }) => {
+            writeln!(f)?;
+            for (condition, rhs) in conditions {
+                write!(f, "  if ")?;
+                disp_condition(condition, f)?;
+                write!(f, ": ")?;
+                disp_rhs(rhs, f)?;
+                writeln!(f)?;
+            }
+            if let Some(fallback) = fallback {
+                write!(f, "  ")?;
+                disp_rhs(fallback, f)?;
+                writeln!(f)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn format_file_properties(props: &FileProps) -> impl Display + '_ {
     lazy_format!(|f| {
         let FileProps {
             implementation_status,
             is_disabled,
             prefs,
             tags,
+            bug,
         } = props;
+
+        if let Some(bug) = bug {
+            write_prop_val("disabled", bug, Display::fmt, f)?;
+        }
 
         if let Some(implementation_status) = implementation_status {
             write_prop_val(
@@ -654,7 +717,8 @@ impl<'a> metadata::Subtests<'a> for Subtests {
     ) {
         let Self(subtests) = self;
         if subtests.get(&name).is_some() {
-            emitter.emit(Rich::custom(span, "duplicate subtest {name:?}"));
+            //emitter.emit(Rich::custom(span, "duplicate subtest {name:?} ignored"));
+            return;
         }
         subtests.insert(name, subtest);
     }
@@ -727,11 +791,16 @@ where
         ));
         let TestProps {
             is_disabled,
+            bug,
             expectations,
         } = property;
 
-        if *is_disabled {
-            writeln!(f, "{indent}disabled: true")?;
+        if let Some(PropertyValue::Unconditional(disabled)) = is_disabled {
+            writeln!(f, "{indent}disabled: {}", disabled)?;
+        }
+
+        if let Some(PropertyValue::Unconditional(bug)) = bug {
+            writeln!(f, "{indent}bug: {bug}")?;
         }
 
         if let Some(exps) = expectations {
@@ -822,7 +891,8 @@ pub struct TestProps<Out>
 where
     Out: EnumSetType,
 {
-    pub is_disabled: bool,
+    pub is_disabled: Option<PropertyValue<Applicability, String>>,
+    pub bug: Option<PropertyValue<Applicability, String>>,
     pub expectations: Option<NormalizedExpectationPropertyValue<Out>>,
 }
 
@@ -832,7 +902,8 @@ where
 {
     fn default() -> Self {
         Self {
-            is_disabled: false,
+            is_disabled: None,
+            bug: None,
             expectations: None,
         }
     }
@@ -845,6 +916,7 @@ where
     fn insert(&mut self, prop: TestProp<Out>, emitter: &mut Emitter<Rich<'a, char>>) {
         let Self {
             is_disabled,
+            bug,
             expectations,
         } = self;
 
@@ -904,17 +976,23 @@ where
                     }
                 });
             }
-            TestPropKind::Disabled => {
-                if *is_disabled {
+            TestPropKind::Disabled(s) => {
+                if is_disabled.is_some() {
                     emitter.emit(Rich::custom(span, "duplicate `disabled` key detected"))
                 }
-                *is_disabled = true;
+                *is_disabled = Some(s)
+            }
+            TestPropKind::Bug(s) => {
+                if bug.is_some() {
+                    emitter.emit(Rich::custom(span, "duplicate `disabled` key detected"))
+                }
+                *bug = Some(s)
             }
         }
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Applicability {
     pub platform: Option<Platform>,
     pub build_profile: Option<BuildProfile>,
@@ -935,7 +1013,8 @@ where
     Out: EnumSetType,
 {
     Expected(PropertyValue<Applicability, Expectation<Out>>),
-    Disabled,
+    Disabled(PropertyValue<Applicability, String>),
+    Bug(PropertyValue<Applicability, String>),
 }
 
 impl<Out> TestProp<Out>
@@ -1091,24 +1170,33 @@ where
                 }),
             helper
                 .parser(
-                    just("disabled").to(()),
-                    conditional_term,
-                    just("true").to(()),
+                    keyword("disabled").to(()),
+                    conditional_term.clone(),
+                    any()
+                        .and_is(newline().or(end()).not())
+                        .repeated()
+                        .at_least(1)
+                        .to_slice()
+                        .map(|s: &str| s.to_owned()),
                 )
-                .validate(|((), val), e, emitter| {
-                    match val {
-                        PropertyValue::Unconditional(()) => (),
-                        PropertyValue::Conditional { .. } => {
-                            emitter.emit(Rich::custom(
-                                e.span(),
-                                "conditional rules for `disabled` aren't supported yet",
-                            ));
-                        }
-                    }
-                    TestProp {
-                        span: e.span(),
-                        kind: TestPropKind::Disabled,
-                    }
+                .map_with(|((), is_disabled), e| TestProp {
+                    span: e.span(),
+                    kind: TestPropKind::Disabled(is_disabled),
+                }),
+            helper
+                .parser(
+                    keyword("bug").to(()),
+                    conditional_term.clone(),
+                    any()
+                        .and_is(newline().or(end()).not())
+                        .repeated()
+                        .at_least(1)
+                        .to_slice()
+                        .map(|s: &str| s.to_owned()),
+                )
+                .map_with(|((), bug), e| TestProp {
+                    span: e.span(),
+                    kind: TestPropKind::Bug(bug),
                 }),
         ))
     }
@@ -1248,12 +1336,13 @@ r#"
 [asdf]
 "#
         ),
-        @r###"
+        @r#"
     ParseResult {
         output: Some(
             File {
                 properties: FileProps {
                     is_disabled: None,
+                    bug: None,
                     prefs: None,
                     tags: None,
                     implementation_status: None,
@@ -1271,7 +1360,7 @@ r#"
         ),
         errs: [],
     }
-    "###
+    "#
     );
 
     assert_debug_snapshot!(
@@ -1281,12 +1370,13 @@ r#"
   [blarg]
 "#
         ),
-        @r###"
+        @r#"
     ParseResult {
         output: Some(
             File {
                 properties: FileProps {
                     is_disabled: None,
+                    bug: None,
                     prefs: None,
                     tags: None,
                     implementation_status: None,
@@ -1311,7 +1401,7 @@ r#"
         ),
         errs: [],
     }
-    "###
+    "#
     );
 
     assert_debug_snapshot!(
@@ -1322,12 +1412,13 @@ r#"
     expected: PASS
 "#
         ),
-        @r###"
+        @r#"
     ParseResult {
         output: Some(
             File {
                 properties: FileProps {
                     is_disabled: None,
+                    bug: None,
                     prefs: None,
                     tags: None,
                     implementation_status: None,
@@ -1362,7 +1453,7 @@ r#"
         ),
         errs: [],
     }
-    "###
+    "#
     );
 
     let parser = || single_leading_newline(Test::parser());
@@ -1652,5 +1743,28 @@ r#"
         errs: [],
     }
     "###
+    );
+
+    assert_debug_snapshot!(
+        parser().parse(
+r#"
+[shaders-with-uniform-structs.html]
+  bug: https://github.com/servo/servo/issues/20601
+
+  [WebGL test #5]
+    expected: FAIL
+
+  [WebGL test #5]
+    expected: FAIL
+"#
+        ),
+        @r"
+    ParseResult {
+        output: None,
+        errs: [
+            found ''b'' at 39..40 expected ''e'', ''d'', ''['', or ''#'',
+        ],
+    }
+    "
     );
 }

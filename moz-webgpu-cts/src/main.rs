@@ -146,7 +146,7 @@ fn run(cli: Cli) -> ExitCode {
         let webgpu_cts_meta_parent_dir = if !servo {
             path!(&gecko_checkout | "testing" | "web-platform" | "mozilla" | "meta" | "webgpu")
         } else {
-            path!(&gecko_checkout | "tests" | "wpt" | "webgpu" | "meta" | "webgpu")
+            path!(&gecko_checkout | "tests" | "wpt" | "webgl" | "meta")
         };
 
         let mut found_err = false;
@@ -1027,13 +1027,14 @@ fn run(cli: Cli) -> ExitCode {
                 } = test;
 
                 let TestProps {
+                    bug,
                     is_disabled,
                     expectations,
                 } = properties;
 
                 let test_name = Arc::new(test_name);
 
-                if is_disabled {
+                if is_disabled.is_some() {
                     analysis.for_each_platform_mut(|analysis| {
                         analysis
                             .tests_with_disabled_or_skip
@@ -1183,11 +1184,12 @@ fn run(cli: Cli) -> ExitCode {
 
                     let Subtest { properties } = subtest;
                     let TestProps {
+                        bug,
                         is_disabled,
                         expectations,
                     } = properties;
 
-                    if is_disabled {
+                    if is_disabled.is_some() {
                         analysis
                             .windows
                             .tests_with_disabled_or_skip

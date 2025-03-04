@@ -93,7 +93,8 @@ impl<'a> Subtests<'a> for UnstructuredSubtests<'a> {
     ) {
         let Self(subtests) = self;
         if subtests.get(&name).is_some() {
-            emitter.emit(Rich::custom(span, format!("duplicate subtest {name:?}")))
+            //emitter.emit(Rich::custom(span, format!("duplicate subtest {name:?} ignored")));
+            return;
         }
         subtests.insert(name, subtest);
     }

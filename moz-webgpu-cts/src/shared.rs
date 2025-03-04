@@ -338,8 +338,8 @@ const SCOPE_DIR_FX_PRIVATE_STR: &str = "testing/web-platform/mozilla";
 const SCOPE_DIR_FX_PRIVATE_COMPONENTS: &[&str] = &["testing", "web-platform", "mozilla"];
 const SCOPE_DIR_FX_PUBLIC_STR: &str = "testing/web-platform";
 const SCOPE_DIR_FX_PUBLIC_COMPONENTS: &[&str] = &["testing", "web-platform"];
-const SCOPE_DIR_SERVO_PUBLIC_STR: &str = "tests/wpt/webgpu";
-const SCOPE_DIR_SERVO_PUBLIC_COMPONENTS: &[&str] = &["tests", "wpt", "webgpu"];
+const SCOPE_DIR_SERVO_PUBLIC_STR: &str = "tests/wpt/webgl";
+const SCOPE_DIR_SERVO_PUBLIC_COMPONENTS: &[&str] = &["tests", "wpt", "webgl"];
 
 impl<'a> TestPath<'a> {
     pub fn from_execution_report(
